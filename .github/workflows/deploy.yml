@@ -52,11 +52,12 @@ jobs:
             mkdir -p /opt/apps/edu3d
             cd /opt/apps/edu3d
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            echo "${{ secrets.ENV_CONTENTS }}" > .env
-
-            # edu3d preia portul 3004, folosit inainte de kidmy. Eliberam portul
-            # daca vechiul container mai exista pe server.
-            docker rm -f kidmy-app 2>/dev/null || true
+            # Setarile se scriu literal (heredoc intre ghilimele): valori ca
+            # EMAIL_FROM="edu3d <contact@edu3d.ro>" nu mai sunt interpretate de shell.
+            cat > .env <<'ENV_CONTENTS_EOF'
+            ${{ secrets.ENV_CONTENTS }}
+            ENV_CONTENTS_EOF
+            if [ ! -s .env ]; then echo "ENV_CONTENTS gol - opresc deploy-ul"; exit 1; fi
 
             cat <<EOF > docker-compose.yml
             services:
@@ -68,4 +69,14 @@ jobs:
                   - "3004:3000"
                 env_file: .env
             EOF
-            docker compose up -d --pull always --force-recreate
+            # Imaginea noua se descarca inainte sa oprim ceva
+            docker compose pull || exit 1
+
+            # edu3d preia portul 3004 de la vechiul kidmy, abia acum, cand totul e pregatit.
+            # Daca edu3d nu porneste, kidmy este repornit, ca site-ul sa nu ramana cazut.
+            docker rm -f kidmy-app 2>/dev/null || true
+            if ! docker compose up -d --force-recreate; then
+              echo "edu3d nu a pornit - repornesc kidmy"
+              (cd /opt/apps/kidmy && docker compose up -d)
+              exit 1
+            fi
