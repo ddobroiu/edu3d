@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { WELCOME_CREDITS } from "@/lib/credits";
+import { sendWelcomeEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +56,8 @@ export async function POST(req: Request) {
         description: "Credite de bun venit pe edu3d",
       },
     });
+
+    await sendWelcomeEmail(email, name, WELCOME_CREDITS);
 
     return NextResponse.json({ ok: true });
   } catch (error) {

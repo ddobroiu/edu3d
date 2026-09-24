@@ -182,6 +182,13 @@ export default function AuthForm() {
             minLength={isRegister ? 8 : undefined}
             autoComplete={isRegister ? "new-password" : "current-password"}
           />
+          {!isRegister && (
+            <p className="mt-2 text-right text-sm">
+              <a href="/resetare-parola" className="text-brand-600 hover:underline">
+                Ai uitat parola?
+              </a>
+            </p>
+          )}
         </div>
 
         {error && (

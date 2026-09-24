@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { getStripe } from "@/lib/stripe";
 import { addCredits } from "@/lib/credits";
 import { issueInvoiceForPurchase } from "@/lib/invoicing";
+import { sendPurchaseEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +62,28 @@ export async function POST(req: Request) {
             // Factura se emite dupa credite: daca emiterea pica, clientul are
             // deja ce a platit, iar eroarea ramane inregistrata pe achizitie.
             await issueInvoiceForPurchase(purchaseId, checkout.customer_details);
+
+            // Confirmarea platii, cu linkul facturii daca a fost emisa
+            const done = await prisma.purchase.findUnique({
+              where: { id: purchaseId },
+              select: {
+                amount: true,
+                currency: true,
+                credits: true,
+                invoiceUrl: true,
+                user: { select: { email: true, name: true } },
+              },
+            });
+            const to = checkout.customer_details?.email || done?.user.email;
+            if (done && to) {
+              await sendPurchaseEmail(to, {
+                name: done.user.name,
+                credits: done.credits,
+                amount: done.amount,
+                currency: done.currency,
+                invoiceUrl: done.invoiceUrl,
+              });
+            }
           }
         }
       }
