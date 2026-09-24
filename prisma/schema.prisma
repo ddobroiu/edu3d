@@ -1,0 +1,354 @@
+// edu3d.ro - schema Prisma
+//
+// IMPORTANT: baza de date `toateproiectele` este COMUNA cu kidmy si 3dview.
+// Toate modelele de aici sunt mapate explicit pe tabele cu prefix `edu3d_`,
+// ca sa nu atinga niciodata tabelele celorlalte platforme (User, Generation, etc.).
+// NU rula `prisma migrate` sau `prisma db push` pe aceasta baza -> foloseste
+// `npm run db:init`, care aplica prisma/init.sql cu CREATE TABLE IF NOT EXISTS.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Conturi (parinte / profesor / admin)
+// ---------------------------------------------------------------------------
+
+model User {
+  id               String    @id @default(cuid())
+  name             String?
+  email            String?   @unique
+  emailVerified    DateTime?
+  image            String?
+  passwordHash     String?
+  role             String    @default("PARENT") // PARENT, TEACHER, ADMIN
+  credits          Int       @default(30) // credite de bun venit
+  totalCreditsUsed Int       @default(0)
+  schoolName       String? // completat de profesori
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  accounts           Account[]
+  sessions           Session[]
+  children           ChildProfile[]
+  classrooms         Classroom[]
+  generations        Generation[]
+  purchases          Purchase[]
+  creditTransactions CreditTransaction[]
+  billingDetails     BillingDetails?
+
+  @@index([role])
+  @@map("edu3d_users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("edu3d_accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("edu3d_sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("edu3d_verification_tokens")
+}
+
+model PasswordResetToken {
+  id         String   @id @default(cuid())
+  identifier String
+  token      String   @unique
+  expires    DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([identifier])
+  @@map("edu3d_password_reset_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Copii si clase
+// ---------------------------------------------------------------------------
+
+model ChildProfile {
+  id        String   @id @default(cuid())
+  ownerId   String // parintele (sau profesorul) care administreaza profilul
+  name      String
+  avatar    String   @default("albastru") // cheia de culoare pentru initiale
+  birthYear Int?
+  pinHash   String? // PIN de 4 cifre, optional, ca sa nu intre pe profilul altui frate
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner       User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  generations Generation[]
+  memberships ClassroomMember[]
+  progress    LessonProgress[]
+
+  @@index([ownerId])
+  @@map("edu3d_child_profiles")
+}
+
+model Classroom {
+  id         String   @id @default(cuid())
+  teacherId  String
+  name       String
+  grade      String? // "Clasa a III-a"
+  joinCode   String   @unique // cod scurt pe care il dai elevilor
+  creditPool Int      @default(0) // credite alocate clasei de profesor
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  teacher     User              @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  members     ClassroomMember[]
+  generations Generation[]
+
+  @@index([teacherId])
+  @@map("edu3d_classrooms")
+}
+
+model ClassroomMember {
+  id          String   @id @default(cuid())
+  classroomId String
+  childId     String
+  joinedAt    DateTime @default(now())
+
+  classroom Classroom    @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  child     ChildProfile @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([classroomId, childId])
+  @@index([childId])
+  @@map("edu3d_classroom_members")
+}
+
+// ---------------------------------------------------------------------------
+// Generari 3D
+// ---------------------------------------------------------------------------
+
+model Generation {
+  id             String  @id @default(cuid())
+  userId         String // contul care plateste (parinte / profesor)
+  childId        String? // copilul care a creat modelul
+  classroomId    String? // daca a fost creat in cadrul unei clase
+  mode           String  @default("TEXT") // TEXT, IMAGE
+  prompt         String? @db.Text // ce a scris copilul, in romana
+  promptEn       String? @db.Text // varianta tradusa, trimisa la model
+  sourceImageUrl String? @db.Text // poza incarcata sau imaginea generata din text
+  modelUrl       String? @db.Text // GLB-ul final, servit prin /api/storage
+  thumbnailUrl   String? @db.Text
+
+  // starea pipeline-ului Replicate
+  status       String  @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  stage        String  @default("MODEL") // IMAGE (text->imagine), MODEL (imagine->3D)
+  predictionId String? // predictia Replicate aflata in lucru
+
+  creditsCost  Int       @default(10)
+  /// Cate incercari de procesare au esuat dupa ce predictia a reusit.
+  processAttempts Int    @default(0)
+  refunded     Boolean   @default(false)
+  isPublic     Boolean   @default(false) // apare in galeria publica
+  subject      String? // BIOLOGIE, ASTRONOMIE, ISTORIE, GEOGRAFIE, FANTEZIE...
+  views        Int       @default(0)
+  errorMessage String?   @db.Text
+  createdAt    DateTime  @default(now())
+  completedAt  DateTime?
+
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  child     ChildProfile? @relation(fields: [childId], references: [id], onDelete: SetNull)
+  classroom Classroom?    @relation(fields: [classroomId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([childId])
+  @@index([classroomId])
+  @@index([status])
+  @@index([isPublic, createdAt])
+  @@map("edu3d_generations")
+}
+
+// ---------------------------------------------------------------------------
+// Lectii (modele 3D curate, pregatite de noi)
+// ---------------------------------------------------------------------------
+
+model Lesson {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  subject     String // BIOLOGIE, ASTRONOMIE, ISTORIE, GEOGRAFIE, CHIMIE
+  description String   @db.Text
+  ageMin      Int      @default(6)
+  ageMax      Int      @default(14)
+  coverUrl    String?  @db.Text
+  modelUrl    String   @db.Text
+  hotspots    Json? // puncte interactive pe model: [{ position, title, text }]
+  quiz        Json? // intrebari simple la finalul lectiei
+  vrEnabled   Boolean  @default(true)
+  published   Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  progress LessonProgress[]
+
+  @@index([subject])
+  @@index([published, sortOrder])
+  @@map("edu3d_lessons")
+}
+
+model LessonProgress {
+  id          String    @id @default(cuid())
+  lessonId    String
+  childId     String
+  score       Int? // scor la quiz, 0-100
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  lesson Lesson       @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  child  ChildProfile @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([lessonId, childId])
+  @@index([childId])
+  @@map("edu3d_lesson_progress")
+}
+
+// ---------------------------------------------------------------------------
+// Credite si plati
+// ---------------------------------------------------------------------------
+
+model CreditTransaction {
+  id          String   @id @default(cuid())
+  userId      String
+  amount      Int // pozitiv la adaugare, negativ la consum
+  type        String // PURCHASE, GENERATION, REFUND, BONUS, CLASSROOM_ALLOCATION
+  description String
+  purchaseId  String?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([type])
+  @@map("edu3d_credit_transactions")
+}
+
+model Purchase {
+  id              String    @id @default(cuid())
+  userId          String
+  stripeSessionId String?   @unique
+  packageId       String?
+  amount          Float // pret platit
+  credits         Int
+  currency        String    @default("RON")
+  status          String    @default("PENDING") // PENDING, COMPLETED, FAILED, REFUNDED
+  invoiceUrl      String?
+  invoiceSeries   String?
+  invoiceNumber   String?
+  /// De ce nu s-a putut emite factura, ca sa poata fi reluata din administrare.
+  invoiceError    String?   @db.Text
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("edu3d_purchases")
+}
+
+model BillingDetails {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  type        String   @default("personal") // personal, company
+  firstName   String?
+  lastName    String?
+  companyName String?
+  cui         String?
+  regCom      String?
+  address     String
+  city        String
+  county      String?
+  country     String   @default("RO")
+  zip         String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("edu3d_billing_details")
+}
+
+// ---------------------------------------------------------------------------
+// Biblioteca externa, adusa in platforma
+// ---------------------------------------------------------------------------
+
+/// Modele din biblioteca publica, descarcate o singura data si servite de noi.
+/// Dupa prima cerere, fisierul sta in R2 si se afiseaza in viewerul propriu,
+/// cu AR, exact ca modelele generate de utilizatori.
+model LibraryModel {
+  uid          String    @id // identificatorul din biblioteca sursa
+  name         String
+  author       String?
+  authorUrl    String?
+  license      String? // eticheta afisata, ex. "CC Attribution"
+  licenseSlug  String? // cc0, by, by-sa
+  thumbnailUrl String?   @db.Text
+  modelUrl     String?   @db.Text // GLB-ul nostru, servit prin /api/storage
+  iosUrl       String?   @db.Text // USDZ pentru AR pe iPhone, daca exista
+  fileSize     Int?
+  status       String    @default("PENDING") // PENDING, READY, FAILED
+  errorMessage String?   @db.Text
+  views        Int       @default(0)
+  createdAt    DateTime  @default(now())
+  cachedAt     DateTime?
+  /// Ultima accesare: pe baza ei se elibereaza spatiul in R2.
+  lastViewedAt DateTime?
+
+  @@index([status])
+  @@index([lastViewedAt])
+  @@map("edu3d_library_models")
+}
+
+/// Deschiderea unui model din biblioteca se plateste o singura data de fiecare
+/// utilizator. Randul de aici tine minte ca a platit, ca sa nu i se retina
+/// credite si la urmatoarele vizionari ale aceluiasi model.
+model LibraryUnlock {
+  id          String   @id @default(cuid())
+  userId      String
+  uid         String // modelul din biblioteca
+  creditsPaid Int
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, uid])
+  @@index([userId])
+  @@map("edu3d_library_unlocks")
+}
